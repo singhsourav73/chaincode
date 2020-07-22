@@ -16,7 +16,6 @@ class TrackTrace extends Contract {
         let assetKey = await ctx.stub.createCompositeKey(indexName, ['id1']);
 
         let assetDetails = {};
-        assetDetails.previousOwner = null;
         assetDetails.ownershipChange = null;
         assetDetails.owner = "singhsourav73@gmail.com";
         assetDetails.detail =  {
@@ -33,7 +32,6 @@ class TrackTrace extends Contract {
 
         assetKey = await ctx.stub.createCompositeKey(indexName, ['id2']);
 
-        assetDetails.previousOwner = null;
         assetDetails.ownershipChange = null;
         assetDetails.owner = "singhsourav73@gmail.com";
         assetDetails.detail =  {
@@ -70,14 +68,13 @@ class TrackTrace extends Contract {
 
         let assetDetails = {};
         assetDetails.detail = detail;
-        assetDetails.previousOwner = null;
         assetDetails.ownershipChange = null;
         assetDetails.owner = owner;
 
         await ctx.stub.putState(assetKey, Buffer.from(JSON.stringify(assetDetails)));
         console.info('============= END : Create Asset ===========');
 
-        return JSON.stringify(assetKey);
+        return JSON.stringify({txId : ctx.stub.getTxID(), id : id });
     }
 
     async getAssetByOwner(ctx, owner) {
@@ -124,6 +121,8 @@ class TrackTrace extends Contract {
 
         let assetDetails = JSON.parse(assetAsBytes.toString());
 
+        assetDetails.owner = toOwner;
+
         let aclList = [];
         try {
             aclList = JSON.parse(option);
@@ -137,30 +136,61 @@ class TrackTrace extends Contract {
             AD - Auto Delay
             AAD - Allow Auto Dispute
         */
-        aclList.forEach(acl => {
-            if (acl === "AAR" || acl === "AS") {
-                assetDetails.previousOwner = fromOwner;
-                assetDetails.owner = toOwner;
-            } else {
-                assetDetails.previousOwner = fromOwner;
-                assetDetails.owner = toOwner;
-                assetDetails.ownershipChange = {
-                    status : "WaitingForApproval"
-                }
+        if (!aclList.includes("AAR")) {
+            assetDetails.ownershipChange = {
+                status : "WaitingForApproval",
+                previousOwner: fromOwner
             }
-            // Require to implement AD and AAD
-        });
+        }        
+        // Require to implement AD and AAD
+
         await ctx.stub.putState(assetKey, Buffer.from(JSON.stringify(assetDetails)));
+        return JSON.stringify({assetDetails, txId : ctx.stub.getTxID()});
+    }
+
+    async acceptAsset(ctx, id, state) {
+        let indexName = 'owner~id';
+        let assetKey = await ctx.stub.createCompositeKey(indexName, [id]);
+
+        const assetAsBytes = await ctx.stub.getState(assetKey);
+        if (!assetAsBytes || assetAsBytes.length === 0) {
+            throw new Error(`Asset does not exist`);
+        }
+
+        let assetDetails = JSON.parse(assetAsBytes.toString());
+
+        if (state === true || state === "true") {
+            assetDetails.ownershipChange = null;
+        } else {
+            assetDetails.ownershipChange.status = "Rejected";
+            assetDetails.ownershipChange.rejectedBy = assetDetails.owner;
+            assetDetails.owner = assetDetails.ownershipChange.previousOwner;
+            assetDetails.ownershipChange.previousOwner = null;
+        }
+
+        await ctx.stub.putState(assetKey, Buffer.from(JSON.stringify(assetDetails)));
+        return JSON.stringify({assetDetails, txId : ctx.stub.getTxID()});
     }
 
     async getHistoryForAsset(ctx, id) {
         let indexName = 'owner~id';
         let assetKey = await ctx.stub.createCompositeKey(indexName, [id]);
     
-        let resultsIterator = await ctx.stub.getHistoryForKey(assetKey);
-        let results = await this.getAllResults(resultsIterator, true);
-    
-        return Buffer.from(JSON.stringify(results));
+        const resultsIterator = ctx.stub.getHistoryForKey(assetKey);
+        
+        const result = [];
+        for await (const keyMod of resultsIterator) {
+            const resp = {
+                timestamp : keyMod.timestamp,
+                txid: keyMod.tx_id
+            }
+            if (keyMod.is_delete) {
+                resp.data = 'KEY DELETED';
+            } else {
+                resp.data = keyMod.value.toString('utf8');
+            }
+            result.push(resp);
+        }
     }
 
     async getAllResults(iterator, isHistory) {
